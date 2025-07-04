@@ -1,27 +1,36 @@
 use anyhow::{Result, anyhow};
-use std::{net::SocketAddr, ops::Deref};
+use std::net::SocketAddr;
+use tokio::sync::broadcast;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
 
 pub struct User {
-    name: String,
+    pub name: String,
     socket: TcpStream,
     addr: SocketAddr,
 }
 
+#[derive(Clone, Debug)]
+pub struct ChatMessage {
+    pub sender: Option<String>,
+    pub content: String,
+}
+
 impl User {
-    pub async fn new(mut socket: TcpStream, addr: SocketAddr) -> Self {
+    pub async fn new(mut socket: TcpStream, addr: SocketAddr) -> Result<Self> {
         let name = match Self::get_client_name(&mut socket).await {
             Ok(n) => n,
-            Err(e) => {
-                eprintln!("Error getting name from {addr:?}: {e:?}. Defaulting to 'Unknown'.");
+            Err(_) => {
+                eprintln!(
+                    "User with address {addr:?} exited before setting a name . Defaulting to 'Unknown'.\n"
+                );
                 String::from("Unknown")
             }
         };
 
-        User { name, socket, addr }
+        Ok(User { name, socket, addr })
     }
 
     async fn get_client_name(socket: &mut TcpStream) -> Result<String> {
@@ -51,39 +60,68 @@ impl User {
         }
     }
 
-    pub async fn handle_client(mut self) {
-        println!("[{} - {:?}] connected", self.name, self.addr);
+    pub async fn handle_client(
+        &mut self,
+        tx: &broadcast::Sender<ChatMessage>,
+        rx: &mut broadcast::Receiver<ChatMessage>,
+    ) -> Result<()> {
+        println!("New client [{} - {:?}] connected\n", self.name, self.addr);
 
         let mut buf = [0; 2048];
-        loop {
-            match self.socket.read(&mut buf).await {
-                Ok(0) => {
-                    println!("[{} - {:?}] disconnected", self.name, self.addr);
-                    break;
-                }
-                Ok(n) => {
-                    let received = String::from_utf8_lossy(&buf[..n]);
-                    if !received.trim().is_empty() { 
-                    println!("[{} - {:?}] : {}", self.name, self.addr, received.trim());
-                    }
 
-                    let response = format!("[{}]: ", self.name);
-                    if let Err(e) = self.socket.write_all(response.as_bytes()).await {
-                        eprintln!(
-                            "Failed to write to socket for [{} - {:?}]; error = {:?}",
-                            self.name, self.addr, e
-                        );
+        loop {
+            tokio::select! {
+                result = self.socket.read(&mut buf) => {
+                    let n = result?;
+                    if n == 0 {
+                        println!("Client [{} - {:?}] disconnected\n", self.name, self.addr);
                         break;
                     }
+
+                    let received = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+                    if !received.is_empty() {
+                        let message = ChatMessage {
+                            sender: Some(self.name.clone()),
+                            content: received,
+                        };
+                        if let Some(ref valid) = message.sender {
+                            println!("[{}]: {}", valid, message.content);
+                        }
+                        let _ = tx.send(message);
+                    }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "Failed to read from socket for [{} - {:?}]; error = {:?}",
-                        self.name, self.addr, e
-                    );
-                    break;
+
+                result = rx.recv() => {
+                    match result {
+                        Ok(msg) => {
+                            match &msg.sender {
+                                Some(valid_name) => {
+                                    if valid_name != &self.name {
+                                        let to_send = format!("[{}]: {}\n", valid_name, msg.content);
+                                        if let Err(e) = self.socket.write_all(to_send.as_bytes()).await {
+                                            eprintln!("Failed to send to [{} - {:?}]; error = {:?}\n", self.name, self.addr, e);
+                                            break;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    let to_send = format!("{}\n", msg.content);
+                                    if let Err(e) = self.socket.write_all(to_send.as_bytes()).await {
+                                        eprintln!("Failed to send system message to [{} - {:?}]; error = {:?}\n", self.name, self.addr, e);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Broadcast receive error for [{}]: {:?}\n", self.name, e);
+                            break;
+                        }
+                    }
                 }
             }
         }
+
+        Ok(())
     }
 }
