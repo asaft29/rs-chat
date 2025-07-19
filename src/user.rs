@@ -34,7 +34,12 @@ impl User {
     }
 
     async fn get_client_name(socket: &mut TcpStream) -> Result<String> {
-        socket.write_all(b"Enter your guest name: ").await?;
+        socket
+            .write_all(
+                b"\x1b[2J\x1b[1;1H\x1b[1;34mWelcome to RustChat!\x1b[0m\n\
+          \x1b[1;33mEnter your guest name:\x1b[0m ",
+            )
+            .await?;
 
         let mut name_buffer = Vec::new();
         let mut read_buf = [0; 1];
@@ -96,16 +101,27 @@ impl User {
                         Ok(msg) => {
                             match &msg.sender {
                                 Some(valid_name) => {
-                                    if valid_name != &self.name {
-                                        let to_send = format!("[{}]: {}\n", valid_name, msg.content);
+                                    if valid_name == &self.name {
+
+                                        // messages sent by the client are in green
+                                        let to_send = format!("\x1b[2K\r\x1b[1;32mSent by me - {}\x1b[0m\n", msg.content);
                                         if let Err(e) = self.socket.write_all(to_send.as_bytes()).await {
+                                            eprintln!("Failed to send to [{} - {:?}]; error = {:?}\n", self.name, self.addr, e);
+                                            break;
+                                        }
+                                    } else {
+                                        // for other clients is cyan
+                                        let other_msg = format!("\x1b[36m[{}]: {}\x1b[0m", valid_name, msg.content);
+                                        let padded = format!("{:>80}\n", other_msg);
+                                        if let Err(e) = self.socket.write_all(padded.as_bytes()).await {
                                             eprintln!("Failed to send to [{} - {:?}]; error = {:?}\n", self.name, self.addr, e);
                                             break;
                                         }
                                     }
                                 }
                                 None => {
-                                    let to_send = format!("{}\n", msg.content);
+                                    //magenta
+                                    let to_send = format!("\x1b[1;35m{}\x1b[0m\n", msg.content);
                                     if let Err(e) = self.socket.write_all(to_send.as_bytes()).await {
                                         eprintln!("Failed to send system message to [{} - {:?}]; error = {:?}\n", self.name, self.addr, e);
                                         break;
