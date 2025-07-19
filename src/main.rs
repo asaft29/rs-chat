@@ -4,12 +4,14 @@ use tokio::sync::broadcast;
 mod user;
 use user::{ChatMessage, User};
 
+const SIZE: usize = 2048;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:8080").await?;
     println!("Server listening on 127.0.0.1:8080\n");
 
-    let (tx, _) = broadcast::channel::<ChatMessage>(100);
+    let (tx, _) = broadcast::channel::<ChatMessage>(SIZE);
 
     loop {
         let (socket, addr) = listener.accept().await?;
