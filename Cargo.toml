@@ -1,8 +1,18 @@
 [package]
-name = "TCP-server"
+name = "tcp-server"
 version = "0.1.0"
+description = "asynchronous TCP server tested with telnet clients"
+authors = ["Rares-Stefan Asaftei <rasaft29@gmail.com>"]
+license = "MIT"
 edition = "2024"
+repository = "https://github.com/asaft29/rust-chat"
+
+
+[lib]
+path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0.98"
 tokio = { version = "1", features = ["full"] }
+
+

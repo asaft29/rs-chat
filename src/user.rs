@@ -1,5 +1,8 @@
+#![allow(warnings)]
+
 use anyhow::{Result, anyhow};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,12 +22,16 @@ pub struct ChatMessage {
 }
 
 impl User {
-    pub async fn new(mut socket: TcpStream, addr: SocketAddr) -> Result<Self> {
-        let name = match Self::get_client_name(&mut socket).await {
+    pub async fn new(
+        mut socket: TcpStream,
+        addr: SocketAddr,
+        set: Arc<tcp_server::ConcurrentSet>,
+    ) -> Result<Self> {
+        let name = match Self::get_client_name(&mut socket, set).await {
             Ok(n) => n,
             Err(_) => {
                 eprintln!(
-                    "User with address {addr:?} exited before setting a name . Defaulting to 'Unknown'.\n"
+                    "User with address {addr:?} exited before setting a name. Defaulting to 'Unknown'."
                 );
                 String::from("Unknown")
             }
@@ -33,38 +40,79 @@ impl User {
         Ok(User { name, socket, addr })
     }
 
-    async fn get_client_name(socket: &mut TcpStream) -> Result<String> {
+    async fn get_client_name(
+        socket: &mut TcpStream,
+        set: Arc<tcp_server::ConcurrentSet>,
+    ) -> Result<String> {
         socket
-            .write_all(
-                b"\x1b[2J\x1b[1;1H\x1b[1;34mWelcome to RustChat!\x1b[0m\n\
-          \x1b[1;33mEnter your guest name:\x1b[0m ",
-            )
+            .write_all(b"\x1b[2J\x1b[1;1H\x1b[1;34mWelcome to RustChat!\x1b[0m\n")
             .await?;
-
-        let mut name_buffer = Vec::new();
-        let mut read_buf = [0; 1];
+        socket.flush().await?;
 
         loop {
-            match socket.read_exact(&mut read_buf).await {
-                Ok(_) => {
-                    let byte = read_buf[0];
-                    if byte == b'\n' || byte == b'\r' {
-                        break;
+            socket
+                .write_all(b"\x1b[1;33mEnter your guest name:\x1b[0m ")
+                .await?;
+            socket.flush().await?;
+
+            let mut name_buffer = Vec::new();
+            let mut byte = [0u8; 1];
+
+            loop {
+                match socket.read_exact(&mut byte).await {
+                    Ok(_) => {
+                        if byte[0] == b'\n' {
+                            break;
+                        } else if byte[0] == b'\r' {
+                            match socket.read_exact(&mut byte).await {
+                                Ok(_) if byte[0] == b'\n' => break,
+                                Ok(_) => name_buffer.push(byte[0]),
+                                Err(_) => {
+                                    return Err(anyhow!("Client disconnected while typing name"));
+                                }
+                            }
+                        } else {
+                            name_buffer.push(byte[0]);
+                        }
                     }
-                    name_buffer.push(byte);
+                    Err(_) => return Err(anyhow!("Client disconnected while typing name")),
                 }
-                Err(e) => return Err(anyhow!("Error reading name from socket: {:?}", e)),
+            }
+
+            let name = String::from_utf8_lossy(&name_buffer).trim().to_string();
+
+            if name.is_empty() {
+                socket
+                    .write_all(b"\x1b[1;31mName cannot be empty!\x1b[0m\n")
+                    .await?;
+                socket.flush().await?;
+                continue;
+            }
+
+            if set.contains(name.clone()).await {
+                socket
+                    .write_all(
+                        b"\x1b[1;31mThis guest name is already taken! Please try another one.\x1b[0m\n",
+                    )
+                    .await?;
+                socket.flush().await?;
+                continue;
+            } else {
+                match set.insert(name.clone()).await {
+                    Ok(_) => {
+                        return Ok(name);
+                    }
+                    Err(e) => {
+                        socket
+                            .write_all(format!("\x1b[1;31mError: {e}\x1b[0m\n").as_bytes())
+                            .await?;
+                        socket.flush().await?;
+                        continue;
+                    }
+                }
             }
         }
-
-        let name = String::from_utf8_lossy(&name_buffer).trim().to_string();
-        if name.is_empty() {
-            Ok(String::from("Unknown"))
-        } else {
-            Ok(name)
-        }
     }
-
     pub async fn handle_client(
         &mut self,
         tx: &broadcast::Sender<ChatMessage>,
@@ -103,13 +151,9 @@ impl User {
                                 Some(valid_name) => {
                                     if valid_name == &self.name {
 
-                                        // messages sent by the client are in green
-                                        let to_send = format!("\x1b[2K\r\x1b[1;32mSent by me - {}\x1b[0m\n", msg.content);
-                                        if let Err(e) = self.socket.write_all(to_send.as_bytes()).await {
-                                            eprintln!("Failed to send to [{} - {:?}]; error = {:?}\n", self.name, self.addr, e);
-                                            break;
-                                        }
+                                        continue;
                                     } else {
+
                                         // for other clients is cyan
                                         let other_msg = format!("\x1b[36m[{}]: {}\x1b[0m", valid_name, msg.content);
                                         let padded = format!("{:>80}\n", other_msg);
@@ -120,6 +164,7 @@ impl User {
                                     }
                                 }
                                 None => {
+
                                     //magenta
                                     let to_send = format!("\x1b[1;35m{}\x1b[0m\n", msg.content);
                                     if let Err(e) = self.socket.write_all(to_send.as_bytes()).await {
