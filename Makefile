@@ -6,7 +6,7 @@ help:
 	@echo ""
 	@echo "Available make commands:"
 	@echo "  make run      - Run the project in --release mode"
-	@echo "  make client   - Run the demo client script in"
+	@echo "  make client   - Run the demo client script"
 	@echo "  make build    - Build the project in --release mode"
 	@echo "  make test     - Run all unit and integration tests, none for now"
 	@echo "  make fmt      - Format the code using rustfmt"
