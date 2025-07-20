@@ -20,7 +20,7 @@ run:
 
 .PHONY: client
 client:
-	bash client.sh
+	bash bash/client.sh
 
 .PHONY: build
 build:
