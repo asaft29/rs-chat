@@ -142,6 +142,9 @@ To test the chat functionality:
 ![Active Chat](doc/chatting.png)
 ---
 
+![Invalid Username](doc/taken.png)
+---
+
 ![Client Script](doc/script.png)
 
 <br>
