@@ -19,6 +19,8 @@ A TCP chat server built in Rust using <a href="https://tokio.rs/">tokio</a> for 
 
 <br>
 
+### Overview
+
 This chat server handles multiple connections smoothly using tokio's async capabilities. When you send a message, it broadcasts to everyone except you. The client script automatically generates random guest names for users.
 
 The client script is rather helpful for testing the functionality of the API - it detects your Unix package manager and can install missing dependencies like [telnet](https://en.wikipedia.org/wiki/Telnet) and [fortune-mod](https://github.com/shlomif/fortune-mod) with your permission. 
@@ -29,6 +31,17 @@ Everything's built around a simple [Makefile](https://www.gnu.org/software/make/
 
 <br>
 
+### Concurrent Username Validation
+
+To ensure that each connected client uses a **unique username**, I created a custom `ConcurrentSet` type, which internally wraps a `HashSet<String>` inside a [`tokio::sync::RwLock`](https://docs.rs/tokio/latest/tokio/sync/struct.RwLock.html).
+
+This allows the server to perform **concurrent**, **asynchronous reads** and **exclusive writes** on the set across multiple client tasks.
+
+When a client connects and requests a username, the server checks if it already exists in the set using a **read lock**.
+
+If the name is taken, the client is **notified** to try another one. If the name is available, a **write lock** is acquired to **insert** the username into the set safely. This ensures **thread-safe** validation and registration of usernames without **blocking the async runtime**.
+
+<br>
 
 ## Project Structure
 
